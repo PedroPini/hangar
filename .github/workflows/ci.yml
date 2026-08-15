@@ -53,18 +53,35 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-      - name: Build and install package
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
-          tarball="$(npm pack --pack-destination "$RUNNER_TEMP")"
+          version="$(node -p "require('./package.json').version")"
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package version $version"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Release tag must point to a commit on origin/main"
+            exit 1
+          fi
+      - name: Build and install package
+        id: package
+        shell: bash
+        run: |
+          tarball="$(npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP")"
           prefix="$RUNNER_TEMP/hangar-install"
           project="$RUNNER_TEMP/project"
           skill="$project/.agents/skills/smoke"
           prompt="$RUNNER_TEMP/prompt.txt"
+
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
 
           npm install --prefix "$prefix" "$RUNNER_TEMP/$tarball" --ignore-scripts --no-audit --no-fund
           "$prefix/node_modules/.bin/hangar" --help
@@ -74,6 +91,23 @@ jobs:
           printf 'Use' > "$prompt"
           HOME="$RUNNER_TEMP/home" USERPROFILE="$RUNNER_TEMP/home" HANGAR_PROJECT="$project" HANGAR_QUERY=smoke HANGAR_FIRST=1 "$prefix/node_modules/.bin/hangar-editor" "$prompt"
           test "$(cat "$prompt")" = "Use \$smoke"
+      - name: Prepare release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          TARBALL: ${{ steps.package.outputs.tarball }}
+        run: |
+          mkdir -p dist
+          cp "$RUNNER_TEMP/$TARBALL" "dist/$TARBALL"
+          (cd dist && sha256sum "$TARBALL" > "$TARBALL.sha256")
+      - name: Upload release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hangar-release-${{ github.sha }}
+          path: dist/
+          compression-level: 0
+          retention-days: 7
 
   required:
     name: Required
@@ -97,32 +131,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
+          name: hangar-release-${{ github.sha }}
+          path: dist/
       - name: Publish GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="$(node -p "require('./package.json').version")"
-          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match package version $version"
+          shopt -s nullglob
+          assets=(dist/*.tgz dist/*.sha256)
+          if [[ ${#assets[@]} -ne 2 ]]; then
+            echo "::error::Expected one tarball and one checksum"
             exit 1
           fi
-
-          mkdir -p dist
-          tarball="$(npm pack --pack-destination dist)"
-          (cd dist && sha256sum "$tarball" > "$tarball.sha256")
-
-          gh release create "$GITHUB_REF_NAME" \
-            "dist/$tarball" \
-            "dist/$tarball.sha256" \
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --generate-notes \
             --title "Hangar $GITHUB_REF_NAME"

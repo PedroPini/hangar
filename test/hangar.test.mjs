@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -78,6 +78,7 @@ test("discovers project overrides, agents, plugins, and bundled capabilities", a
   const result = run(cli, ["list", "--json", "--project", fixture.project], { env: fixture.env });
   assert.equal(result.status, 0, result.stderr);
   const catalog = JSON.parse(result.stdout);
+  assert.ok(catalog.capabilities.every(item => !("searchText" in item)));
 
   const sharedSkill = catalog.capabilities.find(item => item.id === "shared-skill");
   assert.equal(sharedSkill.scope, "project");
@@ -98,6 +99,54 @@ test("discovers project overrides, agents, plugins, and bundled capabilities", a
   const pluginSkill = catalog.capabilities.find(item => item.id === "plugin-skill");
   assert.ok(pluginSkill.collections.some(collection => collection.id === "demo-plugin"));
   assert.ok(catalog.capabilities.some(item => item.id === "default" && item.kind === "agent"));
+});
+
+test("follows capability symlinks without escaping capability roots", async t => {
+  const fixture = await sandbox(t);
+  const sentinel = "FAKE_HANGAR_SECURITY_SENTINEL_7c21";
+  const secret = join(fixture.home, "private", "fake-secret.txt");
+  const escapedLink = join(fixture.project, ".agents", "skills", "leak", "SKILL.md");
+  const sharedSkill = join(fixture.project, ".agents", "skills", "linked-skill", "SKILL.md");
+  const sharedLink = join(fixture.project, ".claude", "skills", "linked-skill", "SKILL.md");
+  await write(secret, sentinel);
+  await write(sharedSkill, `---
+name: linked-skill
+description: Shared through a safe symlink.
+---
+`);
+  await mkdir(dirname(escapedLink), { recursive: true });
+  await mkdir(dirname(sharedLink), { recursive: true });
+  try {
+    await symlink(secret, escapedLink, "file");
+    await symlink(sharedSkill, sharedLink, "file");
+  } catch (error) {
+    if (error.code === "EPERM" || error.code === "EACCES") {
+      t.skip("File symlinks are unavailable on this runner");
+      return;
+    }
+    throw error;
+  }
+
+  const result = run(cli, ["list", "--json", "--project", fixture.project], { env: fixture.env });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, new RegExp(sentinel));
+  const catalog = JSON.parse(result.stdout);
+  assert.ok(!catalog.capabilities.some(item => item.id === "leak"));
+  const linkedSkill = catalog.capabilities.find(item => item.id === "linked-skill");
+  assert.equal(linkedSkill.sourceCount, 2);
+  assert.ok(linkedSkill.tools.includes("Shared"));
+  assert.ok(linkedSkill.tools.includes("Claude Code"));
+});
+
+test("ignores oversized capability metadata", async t => {
+  const fixture = await sandbox(t);
+  await write(join(fixture.project, ".agents", "skills", "oversized", "SKILL.md"), "x".repeat(1024 * 1024 + 1));
+
+  const result = run(cli, ["list", "--json", "--project", fixture.project], { env: fixture.env });
+  assert.equal(result.status, 0, result.stderr);
+  const catalog = JSON.parse(result.stdout);
+  assert.ok(!catalog.capabilities.some(item => item.id === "oversized"));
+  assert.equal(catalog.unreadableCount, 1);
 });
 
 test("runs the built-in self-check against an isolated catalog", async t => {

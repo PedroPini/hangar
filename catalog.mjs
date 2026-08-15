@@ -5,6 +5,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
 const homeDirectory = homedir();
+const maximumCapabilityFileBytes = 1024 * 1024;
 const skippedDirectories = new Set([".git", ".venv", "node_modules"]);
 const pluginManifestFolders = [
   { folder: ".codex-plugin", tool: "Codex" },
@@ -68,6 +69,52 @@ async function projectAncestors(project) {
 
 function containsPath(parent, child) {
   return parent === child || child.startsWith(`${parent}${sep}`);
+}
+
+async function canonicalDiscoveryRoots(locations, project) {
+  let projectCanonical = project;
+  try {
+    projectCanonical = await realpath(project);
+  } catch (error) {
+    if (error.code !== "ENOENT" && error.code !== "EACCES") throw error;
+  }
+
+  const candidates = (await Promise.all(locations.map(async location => {
+    try {
+      return { location, logical: resolve(location.directory), canonical: await realpath(location.directory) };
+    } catch (error) {
+      if (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "EACCES") return null;
+      throw error;
+    }
+  }))).filter(Boolean);
+  const globalRoots = new Map();
+  const allowedRoots = new Map();
+  const add = (map, kind, path) => map.set(kind, [...new Set([...(map.get(kind) || []), path])]);
+
+  for (const candidate of candidates.filter(item => item.location.scope === "global")) {
+    add(globalRoots, candidate.location.kind, candidate.canonical);
+    add(allowedRoots, candidate.location.kind, candidate.canonical);
+  }
+  for (const candidate of candidates.filter(item => item.location.scope === "project")) {
+    const expected = containsPath(project, candidate.logical)
+      ? join(projectCanonical, relative(project, candidate.logical))
+      : candidate.logical;
+    const trusted = candidate.canonical === candidate.logical
+      || candidate.canonical === expected
+      || (globalRoots.get(candidate.location.kind) || []).some(root => containsPath(root, candidate.canonical));
+    if (trusted) add(allowedRoots, candidate.location.kind, candidate.canonical);
+  }
+  return allowedRoots;
+}
+
+async function readCapabilityFile(path) {
+  const metadata = await stat(path);
+  if (metadata.size > maximumCapabilityFileBytes) {
+    const error = new Error(`Capability file is larger than 1 MiB: ${path}`);
+    error.code = "EFBIG";
+    throw error;
+  }
+  return readFile(path, "utf8");
 }
 
 async function claudePluginLocations(project) {
@@ -145,15 +192,17 @@ export async function resolvedCapabilityLocations(projectDirectory = process.cwd
   return [...unique.values()];
 }
 
-async function discoverFiles(location) {
+async function discoverFiles(location, allowedRoots) {
   const found = [];
   const visited = new Set();
+  const allowed = path => allowedRoots.some(root => containsPath(root, path));
 
   async function walk(directory, depth) {
     let canonical;
     let entries;
     try {
       canonical = await realpath(directory);
+      if (!allowed(canonical)) return;
       if (visited.has(canonical)) return;
       visited.add(canonical);
       entries = await readdir(directory, { withFileTypes: true });
@@ -168,6 +217,8 @@ async function discoverFiles(location) {
       let isFile = entry.isFile();
       if (entry.isSymbolicLink()) {
         try {
+          const canonicalTarget = await realpath(path);
+          if (!allowed(canonicalTarget)) continue;
           const target = await stat(path);
           isDirectory = target.isDirectory();
           isFile = target.isFile();
@@ -299,7 +350,7 @@ function yamlScalarField(yaml, field) {
 
 async function skillPresentation(path) {
   try {
-    const yaml = await readFile(join(dirname(path), "agents", "openai.yaml"), "utf8");
+    const yaml = await readCapabilityFile(join(dirname(path), "agents", "openai.yaml"));
     return {
       name: yamlScalarField(yaml, "display_name"),
       description: yamlScalarField(yaml, "short_description")
@@ -316,7 +367,7 @@ async function readCollectionManifest(path) {
   if (!collectionManifestCache.has(path)) {
     collectionManifestCache.set(path, (async () => {
       try {
-        const manifest = JSON.parse(await readFile(path, "utf8"));
+        const manifest = JSON.parse(await readCapabilityFile(path));
         const interfaceMetadata = manifest.interface || {};
         const rawId = manifest.name || basename(dirname(dirname(path)));
         const rawName = interfaceMetadata.displayName || interfaceMetadata.display_name || rawId;
@@ -353,13 +404,13 @@ async function readPluginCapability(discovery, project) {
   let manifest = {};
   if (discovery.synthetic) {
     try {
-      content = await readFile(join(discovery.path, "README.md"), "utf8");
+      content = await readCapabilityFile(join(discovery.path, "README.md"));
     } catch (error) {
       if (error.code !== "ENOENT" && error.code !== "EACCES") throw error;
       content = discovery.location.pluginId;
     }
   } else {
-    content = await readFile(discovery.path, "utf8");
+    content = await readCapabilityFile(discovery.path);
     manifest = JSON.parse(content);
   }
 
@@ -402,7 +453,7 @@ async function readPluginCapability(discovery, project) {
 
 async function readCapability(discovery, project) {
   if (discovery.location.kind === "plugin") return readPluginCapability(discovery, project);
-  const content = await readFile(discovery.path, "utf8");
+  const content = await readCapabilityFile(discovery.path);
   const { kind, scope, tool } = discovery.location;
   const fallbackName = kind === "skill" ? basename(dirname(discovery.path)) : basename(discovery.path, ".md");
   const isToml = discovery.path.toLowerCase().endsWith(".toml");
@@ -465,7 +516,9 @@ function isNewerVersion(candidate, current) {
 
 export async function scanCapabilities(projectDirectory = process.cwd()) {
   const project = resolve(projectDirectory);
-  const discoveries = (await Promise.all((await resolvedCapabilityLocations(project)).map(discoverFiles))).flat();
+  const locations = await resolvedCapabilityLocations(project);
+  const allowedRoots = await canonicalDiscoveryRoots(locations, project);
+  const discoveries = (await Promise.all(locations.map(location => discoverFiles(location, allowedRoots.get(location.kind) || [])))).flat();
   const settled = await Promise.allSettled(discoveries.map(item => readCapability(item, project)));
   const parsed = [
     ...settled.filter(result => result.status === "fulfilled").map(result => result.value),

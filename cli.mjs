@@ -680,7 +680,7 @@ function previewPane(item, options, width, height) {
 
 function writeList(catalog, capabilities, options) {
   if (options.json) {
-    process.stdout.write(`${JSON.stringify({ ...catalog, capabilities }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ ...catalog, capabilities: capabilities.map(capabilityForOutput) }, null, 2)}\n`);
     return;
   }
 
@@ -691,6 +691,12 @@ function writeList(catalog, capabilities, options) {
     process.stdout.write(`\n${cyan(referenceFor(item, options.host))}  ${bold(item.name)}  ${dim(meta)}\n`);
     process.stdout.write(`${truncate(item.description, width)}\n`);
   }
+}
+
+function capabilityForOutput(capability) {
+  const output = { ...capability };
+  delete output.searchText;
+  return output;
 }
 
 function copyToClipboard(value) {
@@ -1010,7 +1016,7 @@ async function main() {
     const command = copyToClipboard(reference);
     process.stderr.write(`${green("Copied")} ${reference} ${dim(`with ${command}`)}\n`);
   }
-  process.stdout.write(`${options.json ? JSON.stringify(selected, null, 2) : reference}\n`);
+  process.stdout.write(`${options.json ? JSON.stringify(capabilityForOutput(selected), null, 2) : reference}\n`);
 }
 
 main().catch(error => {

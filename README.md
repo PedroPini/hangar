@@ -76,6 +76,7 @@ Inside Codex, press `Ctrl+G`. The native picker opens in the same terminal. Sele
 - Includes the built-in Codex `default`, `worker`, and `explorer` agents.
 - Extracts names and short descriptions from Markdown skills and Markdown/TOML agents.
 - Collapses identical copies and symlinks while preserving their tool sources.
+- Follows symlinks only between discovered capability roots, caps metadata files at 1 MiB, and keeps internal search data out of JSON output.
 - Opens a searchable native terminal picker with no runtime dependencies.
 - Keeps capability type and installation scope as separate, keyboard-controlled filters.
 - Groups project and global results with textual labels that do not rely on color.
