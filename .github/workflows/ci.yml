@@ -3,17 +3,126 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: 1
+  NO_COLOR: 1
+
 jobs:
-  check:
-    runs-on: ubuntu-latest
+  test:
+    name: Test (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 22
+          - os: ubuntu-latest
+            node: 24
+          - os: ubuntu-latest
+            node: 26
+          - os: macos-latest
+            node: 24
+          - os: windows-latest
+            node: 24
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 20
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
       - run: npm run check
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Build and install package
+        shell: bash
+        run: |
+          tarball="$(npm pack --pack-destination "$RUNNER_TEMP")"
+          prefix="$RUNNER_TEMP/hangar-install"
+          project="$RUNNER_TEMP/project"
+          skill="$project/.agents/skills/smoke"
+          prompt="$RUNNER_TEMP/prompt.txt"
+
+          npm install --prefix "$prefix" "$RUNNER_TEMP/$tarball" --ignore-scripts --no-audit --no-fund
+          "$prefix/node_modules/.bin/hangar" --help
+
+          mkdir -p "$skill"
+          printf '%s\n' '---' 'name: smoke' 'description: Package smoke test.' '---' > "$skill/SKILL.md"
+          printf 'Use' > "$prompt"
+          HOME="$RUNNER_TEMP/home" USERPROFILE="$RUNNER_TEMP/home" HANGAR_PROJECT="$project" HANGAR_QUERY=smoke HANGAR_FIRST=1 "$prefix/node_modules/.bin/hangar-editor" "$prompt"
+          test "$(cat "$prompt")" = "Use \$smoke"
+
+  required:
+    name: Required
+    if: ${{ always() }}
+    needs: [test, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify required jobs
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
+        run: |
+          test "$TEST_RESULT" = "success"
+          test "$PACKAGE_RESULT" = "success"
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: required
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package version $version"
+            exit 1
+          fi
+
+          mkdir -p dist
+          tarball="$(npm pack --pack-destination dist)"
+          (cd dist && sha256sum "$tarball" > "$tarball.sha256")
+
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/$tarball" \
+            "dist/$tarball.sha256" \
+            --verify-tag \
+            --generate-notes \
+            --title "Hangar $GITHUB_REF_NAME"

@@ -3,19 +3,34 @@
   "version": "0.1.1",
   "description": "A terminal-native picker for installed AI agents, skills, and plugins.",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PedroPini/hangar.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PedroPini/hangar/issues"
+  },
+  "homepage": "https://github.com/PedroPini/hangar#readme",
   "type": "module",
   "bin": {
     "hangar": "./cli.mjs",
     "hangar-editor": "./editor.mjs"
   },
+  "files": [
+    "assets/hangar-logo-v2.png",
+    "catalog.mjs",
+    "cli.mjs",
+    "editor.mjs"
+  ],
   "packageManager": "pnpm@11.21.0",
   "scripts": {
     "start": "node cli.mjs",
     "list": "node cli.mjs list",
     "scan": "node cli.mjs list --json",
-    "check": "node --check cli.mjs && node --check catalog.mjs && node --check editor.mjs && node cli.mjs check"
+    "test": "node --test",
+    "check": "node --check cli.mjs && node --check catalog.mjs && node --check editor.mjs && node --test"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

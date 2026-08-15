@@ -6,7 +6,8 @@
 
 <p align="center">
   <a href="https://github.com/PedroPini/hangar/actions/workflows/ci.yml"><img src="https://github.com/PedroPini/hangar/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=nodedotjs&logoColor=white" alt="Node.js 20+"></a>
+  <a href="https://github.com/PedroPini/hangar/releases"><img src="https://img.shields.io/github/v/release/PedroPini/hangar" alt="Release"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D22-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22+"></a>
 </p>
 
 A terminal-native, vendor-neutral capability picker for finding the agents, skills, and plugins already available to your AI tools.
@@ -23,7 +24,7 @@ cd hangar
 pnpm add --global .
 ```
 
-Hangar requires Node.js 20 or newer. Once installed, run it from any project:
+Hangar requires Node.js 22 or newer. Once installed, run it from any project:
 
 ```sh
 cd /path/to/project
@@ -109,3 +110,7 @@ pnpm check
 pnpm scan -- --project /path/to/project
 node cli.mjs doctor --project /path/to/project
 ```
+
+## Releases
+
+Set the version in `package.json`, commit it to `main`, then push a matching tag such as `v0.2.0`. The tag must pass the complete CI and package-install checks before GitHub publishes the npm tarball, its SHA-256 checksum, and generated release notes.
