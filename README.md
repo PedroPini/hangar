@@ -4,6 +4,11 @@
   <img src="assets/hangar-logo-v2.png" alt="Hangar" width="720">
 </p>
 
+<p align="center">
+  <a href="https://github.com/PedroPini/hangar/actions/workflows/ci.yml"><img src="https://github.com/PedroPini/hangar/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=nodedotjs&logoColor=white" alt="Node.js 20+"></a>
+</p>
+
 A terminal-native, vendor-neutral capability picker for finding the agents, skills, and plugins already available to your AI tools.
 
 <img width="2326" height="966" alt="clop_2026-08-15_566" src="https://github.com/user-attachments/assets/adaaa1fe-ed45-45b9-bc43-814b1356fd0f" />

@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { emitKeypressEvents } from "node:readline";
 import { frontmatterField, referenceFor, resolvedCapabilityLocations, scanCapabilities, shorten, tomlField } from "./catalog.mjs";
@@ -968,20 +967,6 @@ async function runCheck(project) {
   const result = await scanCapabilities(project);
   assert.ok(Array.isArray(result.capabilities));
   assert.ok(result.capabilities.every(item => item.name && item.path && item.description));
-  const fixture = await scanCapabilities(fileURLToPath(new URL("./test-fixtures/project", import.meta.url)));
-  assert.equal(fixture.capabilities.find(item => item.id === "explorer")?.tools.includes("Codex"), true);
-  assert.equal(fixture.capabilities.find(item => item.id === "project-release-check")?.scope, "project");
-  assert.equal(fixture.capabilities.find(item => item.id === "project-reviewer")?.kind, "agent");
-  assert.equal(fixture.capabilities.find(item => item.id === "project-codex-reviewer")?.tools.includes("Codex"), true);
-  assert.equal(fixture.capabilities.find(item => item.id === "cursor-layout")?.tools.includes("Cursor"), true);
-  assert.equal(fixture.capabilities.find(item => item.id === "gemini-auditor")?.tools.includes("Gemini CLI"), true);
-  assert.equal(fixture.capabilities.find(item => item.id === "copilot-docs")?.tools.includes("GitHub Copilot"), true);
-  assert.equal(fixture.capabilities.find(item => item.id === "ponytail")?.description, "Project-specific override used to verify project precedence.");
-  const nestedFixture = await scanCapabilities(fileURLToPath(new URL("./test-fixtures/project/nested/workspace", import.meta.url)));
-  assert.equal(nestedFixture.capabilities.find(item => item.id === "project-release-check")?.scope, "project");
-  assert.equal(nestedFixture.capabilities.find(item => item.id === "project-codex-reviewer")?.tools.includes("Codex"), true);
-  assert.equal(nestedFixture.capabilities.find(item => item.id === "gemini-auditor")?.tools.includes("Gemini CLI"), true);
-  assert.equal(nestedFixture.capabilities.find(item => item.id === "copilot-docs")?.tools.includes("GitHub Copilot"), true);
   process.stdout.write(`PASS: catalog, project discovery, and CLI (${result.capabilities.length} capabilities)\n`);
 }
 

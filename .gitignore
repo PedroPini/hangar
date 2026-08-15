@@ -2,6 +2,12 @@
 node_modules/
 .pnpm-store/
 
+# Local-only fixture corpus
+/test-fixtures/
+
+# Generated while Hangar has no dependencies; track it if dependencies are added.
+/pnpm-lock.yaml
+
 # Build / pack output
 *.tgz
 
@@ -17,7 +23,7 @@ pnpm-debug.log*
 .env.*
 !.env.example
 
-# Local agent-tool state (root only — test-fixtures/project/ ships these on purpose)
+# Local agent-tool state
 /.claude/settings.local.json
 /.codex/*.local.*
 /.cursor/*.local.*
