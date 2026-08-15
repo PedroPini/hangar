@@ -703,7 +703,7 @@ function copyToClipboard(value) {
   const candidates = process.platform === "darwin"
     ? [["pbcopy", []]]
     : process.platform === "win32"
-      ? [["clip", []]]
+      ? [[join(process.env.SystemRoot || "C:\\Windows", "System32", "clip.exe"), []]]
       : [["wl-copy", []], ["xclip", ["-selection", "clipboard"]], ["xsel", ["--clipboard", "--input"]]];
 
   for (const [command, args] of candidates) {
@@ -858,7 +858,13 @@ async function interactivePick(catalog, options, shortcuts) {
       cleanup();
       reject(error);
     };
-    const onResize = () => renderPicker(state);
+    const onResize = () => {
+      try {
+        renderPicker(state);
+      } catch (error) {
+        fail(error);
+      }
+    };
     const onKeypress = async (text, key = {}) => {
       try {
         if (key.ctrl && key.name === "c") return finish(null);

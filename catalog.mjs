@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import { open, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
 const homeDirectory = homedir();
 const maximumCapabilityFileBytes = 1024 * 1024;
+const maximumCapabilityBytes = 256 * 1024 * 1024;
+const maximumConcurrentReads = 16;
+const unreadablePathCodes = new Set(["ENOENT", "ENOTDIR", "EACCES", "ELOOP"]);
 const skippedDirectories = new Set([".git", ".venv", "node_modules"]);
 const pluginManifestFolders = [
   { folder: ".codex-plugin", tool: "Codex" },
@@ -60,11 +63,15 @@ async function projectAncestors(project) {
       await stat(join(directory, ".git"));
       break;
     } catch (error) {
-      if (error.code !== "ENOENT" && error.code !== "ENOTDIR" && error.code !== "EACCES") throw error;
+      if (!isUnreadablePath(error)) throw error;
     }
     directory = dirname(directory);
   }
   return ancestors;
+}
+
+function isUnreadablePath(error) {
+  return unreadablePathCodes.has(error.code);
 }
 
 function containsPath(parent, child) {
@@ -76,14 +83,14 @@ async function canonicalDiscoveryRoots(locations, project) {
   try {
     projectCanonical = await realpath(project);
   } catch (error) {
-    if (error.code !== "ENOENT" && error.code !== "EACCES") throw error;
+    if (!isUnreadablePath(error)) throw error;
   }
 
   const candidates = (await Promise.all(locations.map(async location => {
     try {
       return { location, logical: resolve(location.directory), canonical: await realpath(location.directory) };
     } catch (error) {
-      if (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "EACCES") return null;
+      if (isUnreadablePath(error)) return null;
       throw error;
     }
   }))).filter(Boolean);
@@ -107,14 +114,27 @@ async function canonicalDiscoveryRoots(locations, project) {
   return allowedRoots;
 }
 
+let remainingCapabilityBytes = maximumCapabilityBytes;
+
 async function readCapabilityFile(path) {
-  const metadata = await stat(path);
-  if (metadata.size > maximumCapabilityFileBytes) {
-    const error = new Error(`Capability file is larger than 1 MiB: ${path}`);
-    error.code = "EFBIG";
-    throw error;
+  const handle = await open(path, "r");
+  try {
+    const { size } = await handle.stat();
+    if (size > maximumCapabilityFileBytes) {
+      const error = new Error(`Capability file is larger than 1 MiB: ${path}`);
+      error.code = "EFBIG";
+      throw error;
+    }
+    if (size > remainingCapabilityBytes) {
+      const error = new Error(`Capability metadata budget of 256 MiB is exhausted: ${path}`);
+      error.code = "EFBIG";
+      throw error;
+    }
+    remainingCapabilityBytes -= size;
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
   }
-  return readFile(path, "utf8");
 }
 
 async function claudePluginLocations(project) {
@@ -122,19 +142,22 @@ async function claudePluginLocations(project) {
   try {
     installed = JSON.parse(await readFile(join(homeDirectory, ".claude", "plugins", "installed_plugins.json"), "utf8"));
   } catch (error) {
-    if (error.code === "ENOENT" || error.code === "EACCES" || error instanceof SyntaxError) return [];
+    if (isUnreadablePath(error) || error instanceof SyntaxError) return [];
     throw error;
   }
 
   const locations = [];
-  for (const [pluginKey, installations] of Object.entries(installed.plugins || {})) {
+  for (const [pluginKey, installations] of Object.entries(installed?.plugins || {})) {
     for (const installation of Array.isArray(installations) ? installations : []) {
-      if (!installation.installPath) continue;
+      const installPath = installation?.installPath;
+      if (typeof installPath !== "string" || !isAbsolute(installPath)) continue;
+      const root = resolve(installPath);
+      if (!containsPath(homeDirectory, root)) continue;
       const projectScoped = installation.scope === "local" || installation.scope === "project";
-      const projectRoot = installation.projectPath ? resolve(installation.projectPath) : "";
+      const projectPath = installation.projectPath;
+      const projectRoot = typeof projectPath === "string" && isAbsolute(projectPath) ? resolve(projectPath) : "";
       if (projectScoped && (!projectRoot || !containsPath(projectRoot, project))) continue;
       const scope = projectScoped ? "project" : "global";
-      const root = resolve(installation.installPath);
       locations.push(
         {
           scope,
@@ -207,7 +230,7 @@ async function discoverFiles(location, allowedRoots) {
       visited.add(canonical);
       entries = await readdir(directory, { withFileTypes: true });
     } catch (error) {
-      if (error.code === "ENOENT" || error.code === "EACCES") return;
+      if (isUnreadablePath(error)) return;
       throw error;
     }
 
@@ -254,10 +277,10 @@ export function frontmatterField(markdown, field) {
   const lines = block[1].split(/\r?\n/);
 
   for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(new RegExp(`^${field}:\\s*(.*)$`));
+    const match = lines[index].match(new RegExp(`^${field}:\\s*([\\s\\S]*)$`));
     if (!match) continue;
     const value = match[1].trim();
-    if (!/^[>|][+-]?$/.test(value)) return value.replace(/^(['"])(.*)\1$/, "$2");
+    if (!/^[>|][+-]?$/.test(value)) return value.replace(/^(['"])([\s\S]*)\1$/, "$2");
 
     const parts = [];
     for (index += 1; index < lines.length && (/^\s/.test(lines[index]) || !lines[index].trim()); index += 1) {
@@ -291,7 +314,9 @@ export function tomlField(toml, field) {
 }
 
 function withoutTerminalControls(value) {
-  return stripVTControlCharacters(String(value)).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "");
+  return stripVTControlCharacters(String(value))
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "")
+    .replace(/[\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g, "");
 }
 
 function plainText(value) {
@@ -356,7 +381,7 @@ async function skillPresentation(path) {
       description: yamlScalarField(yaml, "short_description")
     };
   } catch (error) {
-    if (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "EACCES") return { name: "", description: "" };
+    if (isUnreadablePath(error)) return { name: "", description: "" };
     throw error;
   }
 }
@@ -375,7 +400,7 @@ async function readCollectionManifest(path) {
         const name = /^[a-z0-9_-]+$/.test(rawName) ? humanize(rawName) : plainText(rawName);
         return { id: slugify(rawId), name, description: shorten(rawDescription || `${name} capability collection.`), sourcePath: path };
       } catch (error) {
-        if (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "EACCES" || error instanceof SyntaxError) return null;
+        if (isUnreadablePath(error) || error instanceof SyntaxError) return null;
         throw error;
       }
     })());
@@ -406,7 +431,7 @@ async function readPluginCapability(discovery, project) {
     try {
       content = await readCapabilityFile(join(discovery.path, "README.md"));
     } catch (error) {
-      if (error.code !== "ENOENT" && error.code !== "EACCES") throw error;
+      if (!isUnreadablePath(error)) throw error;
       content = discovery.location.pluginId;
     }
   } else {
@@ -514,12 +539,32 @@ function isNewerVersion(candidate, current) {
   return candidate.localeCompare(current, undefined, { numeric: true, sensitivity: "base" }) > 0;
 }
 
+async function settledWithLimit(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  const run = async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      try {
+        results[index] = { status: "fulfilled", value: await worker(items[index]) };
+      } catch {
+        results[index] = { status: "rejected" };
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  return results;
+}
+
 export async function scanCapabilities(projectDirectory = process.cwd()) {
   const project = resolve(projectDirectory);
+  remainingCapabilityBytes = maximumCapabilityBytes;
   const locations = await resolvedCapabilityLocations(project);
   const allowedRoots = await canonicalDiscoveryRoots(locations, project);
   const discoveries = (await Promise.all(locations.map(location => discoverFiles(location, allowedRoots.get(location.kind) || [])))).flat();
-  const settled = await Promise.allSettled(discoveries.map(item => readCapability(item, project)));
+  const settled = await settledWithLimit(discoveries, maximumConcurrentReads, item => readCapability(item, project));
   const parsed = [
     ...settled.filter(result => result.status === "fulfilled").map(result => result.value),
     ...codexBuiltInAgents()
