@@ -1,5 +1,9 @@
 # Hangar
 
+<p align="center">
+  <img src="assets/hangar-logo-v2.png" alt="Hangar" width="720">
+</p>
+
 A terminal-native, vendor-neutral capability picker for finding the agents, skills, and plugins already available to your AI tools.
 
 It reads the real filesystem. There is no browser runtime, account, database, or catalog to maintain.
