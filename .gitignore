@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build / pack output
+*.tgz
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local agent-tool state (root only — test-fixtures/project/ ships these on purpose)
+/.claude/settings.local.json
+/.codex/*.local.*
+/.cursor/*.local.*
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows / Linux desktop cruft
+Thumbs.db
+Desktop.ini
+.directory

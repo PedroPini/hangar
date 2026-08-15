@@ -1,0 +1,21 @@
+{
+  "name": "hangar",
+  "version": "0.1.1",
+  "description": "A terminal-native picker for installed AI agents, skills, and plugins.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "hangar": "./cli.mjs",
+    "hangar-editor": "./editor.mjs"
+  },
+  "packageManager": "pnpm@11.21.0",
+  "scripts": {
+    "start": "node cli.mjs",
+    "list": "node cli.mjs list",
+    "scan": "node cli.mjs list --json",
+    "check": "node --check cli.mjs && node --check catalog.mjs && node --check editor.mjs && node cli.mjs check"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
