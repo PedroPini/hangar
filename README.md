@@ -2,6 +2,8 @@
 
 A terminal-native, vendor-neutral capability picker for finding the agents, skills, and plugins already available to your AI tools.
 
+<img width="2326" height="966" alt="clop_2026-08-15_566" src="https://github.com/user-attachments/assets/adaaa1fe-ed45-45b9-bc43-814b1356fd0f" />
+
 It reads the real filesystem. There is no browser runtime, account, database, or catalog to maintain.
 
 ## Install
