@@ -222,53 +222,67 @@ async function configureShortcuts(options) {
   if (!changed) process.stdout.write(`\nChange them with --type-key, --scope-key, or --config-key.\n`);
 }
 
-function queryScore(capability, query) {
+function queryScorer(query) {
   const normalized = query.trim().toLowerCase();
-  if (!normalized) {
-    const scopeScore = capability.scope === "project" ? 100 : 0;
-    const kindScore = capability.kind === "skill" ? 2 : 0;
-    const collectionScore = capability.collections.length ? 0 : 10;
-    return scopeScore + kindScore + collectionScore;
-  }
   const tokens = normalized.split(/\s+/).filter(Boolean);
-  const identity = capability.id.toLowerCase();
-  const fuzzyTokenScore = token => {
-    let cursor = -1;
-    let score = 0;
-    let previous = -2;
-    for (const character of token) {
-      cursor = identity.indexOf(character, cursor + 1);
-      if (cursor < 0) return -1;
-      score += cursor === previous + 1 ? 4 : 1;
-      if (cursor === 0 || /[\s_-]/.test(identity[cursor - 1])) score += 3;
-      previous = cursor;
+
+  return capability => {
+    if (!normalized) {
+      const scopeScore = capability.scope === "project" ? 100 : 0;
+      const kindScore = capability.kind === "skill" ? 2 : 0;
+      const collectionScore = capability.collections.length ? 0 : 10;
+      return scopeScore + kindScore + collectionScore;
+    }
+    const identity = capability.id.toLowerCase();
+    const fuzzyTokenScore = token => {
+      let cursor = -1;
+      let score = 0;
+      let previous = -2;
+      for (const character of token) {
+        cursor = identity.indexOf(character, cursor + 1);
+        if (cursor < 0) return -1;
+        score += cursor === previous + 1 ? 4 : 1;
+        if (cursor === 0 || /[\s_-]/.test(identity[cursor - 1])) score += 3;
+        previous = cursor;
+      }
+      return score;
+    };
+
+    const tokenScores = tokens.map(token => capability.searchText.includes(token) ? 12 : fuzzyTokenScore(token));
+    if (tokenScores.some(score => score < 0)) return -1;
+
+    let score = capability.scope === "project" ? 5 : 0;
+    score += tokenScores.reduce((total, tokenScore) => total + tokenScore, 0);
+    if (capability.id === normalized) score += 120;
+    if (capability.id.startsWith(normalized)) score += 80;
+    if (capability.name.toLowerCase().startsWith(normalized)) score += 60;
+    if (capability.name.toLowerCase().includes(normalized)) score += 30;
+    for (const token of tokens) {
+      if (capability.id.startsWith(token)) score += 12;
+      if (capability.description.toLowerCase().includes(token)) score += 3;
     }
     return score;
   };
+}
 
-  const tokenScores = tokens.map(token => capability.searchText.includes(token) ? 12 : fuzzyTokenScore(token));
-  if (tokenScores.some(score => score < 0)) return -1;
-
-  let score = capability.scope === "project" ? 5 : 0;
-  score += tokenScores.reduce((total, tokenScore) => total + tokenScore, 0);
-  if (capability.id === normalized) score += 120;
-  if (capability.id.startsWith(normalized)) score += 80;
-  if (capability.name.toLowerCase().startsWith(normalized)) score += 60;
-  if (capability.name.toLowerCase().includes(normalized)) score += 30;
-  for (const token of tokens) {
-    if (capability.id.startsWith(token)) score += 12;
-    if (capability.description.toLowerCase().includes(token)) score += 3;
-  }
-  return score;
+function matchesFilters(item, options, toolQuery) {
+  return (options.kind === "all" || item.kind === options.kind)
+    && (options.scope === "all" || item.scope === options.scope)
+    && (!toolQuery || item.tools.some(tool => tool.toLowerCase().includes(toolQuery)));
 }
 
 function matchingCapabilities(capabilities, options) {
-  return capabilities
-    .filter(item => options.kind === "all" || item.kind === options.kind)
-    .filter(item => options.scope === "all" || item.scope === options.scope)
-    .filter(item => !options.tool || item.tools.some(tool => tool.toLowerCase().includes(options.tool.toLowerCase())))
-    .map(item => ({ item, score: queryScore(item, options.query) }))
-    .filter(result => result.score >= 0)
+  const score = queryScorer(options.query);
+  const toolQuery = (options.tool || "").toLowerCase();
+  const results = [];
+
+  for (const item of capabilities) {
+    if (!matchesFilters(item, options, toolQuery)) continue;
+    const value = score(item);
+    if (value >= 0) results.push({ item, score: value });
+  }
+
+  return results
     .sort((left, right) => right.score - left.score || left.item.name.localeCompare(right.item.name))
     .map(result => result.item);
 }
@@ -378,20 +392,24 @@ function actionLabel(item) {
 }
 
 function filterCounts(capabilities, options) {
-  const count = overrides => matchingCapabilities(capabilities, { ...options, ...overrides }).length;
-  return {
-    kinds: {
-      all: count({ kind: "all" }),
-      skill: count({ kind: "skill" }),
-      agent: count({ kind: "agent" }),
-      plugin: count({ kind: "plugin" })
-    },
-    scopes: {
-      all: count({ scope: "all" }),
-      project: count({ scope: "project" }),
-      global: count({ scope: "global" })
+  const score = queryScorer(options.query);
+  const toolQuery = (options.tool || "").toLowerCase();
+  const kinds = { all: 0, skill: 0, agent: 0, plugin: 0 };
+  const scopes = { all: 0, project: 0, global: 0 };
+
+  for (const item of capabilities) {
+    if (toolQuery && !item.tools.some(tool => tool.toLowerCase().includes(toolQuery))) continue;
+    if (score(item) < 0) continue;
+    if (options.scope === "all" || item.scope === options.scope) {
+      kinds.all += 1;
+      kinds[item.kind] += 1;
     }
-  };
+    if (options.kind === "all" || item.kind === options.kind) {
+      scopes.all += 1;
+      scopes[item.scope] += 1;
+    }
+  }
+  return { kinds, scopes };
 }
 
 function filterLine(label, entries, active, hint, width) {
@@ -476,15 +494,17 @@ function sidebarHeading(label, hint, width) {
 function sidebarPane(state, counts, width, height) {
   const baseOptions = { ...state.options, tool: "" };
   const available = matchingCapabilities(state.catalog.capabilities, baseOptions);
-  const toolNames = [...new Set(available.flatMap(item => item.tools))].sort();
+  const toolCounts = new Map();
   const collections = new Map();
   for (const item of available) {
+    for (const tool of item.tools) toolCounts.set(tool, (toolCounts.get(tool) || 0) + 1);
     for (const collection of item.collections) {
       const current = collections.get(collection.id) || { ...collection, count: 0 };
       current.count += 1;
       collections.set(collection.id, current);
     }
   }
+  const toolNames = [...toolCounts.keys()].sort();
   const collectionRows = [...collections.values()].sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));
   const visibleCollections = collectionRows.slice(0, 4);
   const lines = [
@@ -506,7 +526,7 @@ function sidebarPane(state, counts, width, height) {
       ""
     ] : []),
     sidebarHeading("Available in", "", width),
-    ...toolNames.map(tool => sidebarOption(tool, available.filter(item => item.tools.includes(tool)).length, Boolean(state.options.tool) && tool.toLowerCase().includes(state.options.tool.toLowerCase()), width)),
+    ...toolNames.map(tool => sidebarOption(tool, toolCounts.get(tool), Boolean(state.options.tool) && tool.toLowerCase().includes(state.options.tool.toLowerCase()), width)),
     "",
     sidebarHeading("Settings", shortcutLabel(state.shortcuts.config), width),
     state.showConfig ? `${cyan("┃")} ${bold(truncate("hangar config", Math.max(1, width - 2)))}` : dim(truncate("  hangar config", width))
