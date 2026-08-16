@@ -1,7 +1,10 @@
+import { constants } from "node:os";
 import { emitKeypressEvents } from "node:readline";
 import { ESC } from "./ansi.mjs";
 import { renderPicker } from "./picker.mjs";
 import { shortcutConfigPath, shortcutFromKey, shortcutLabel, shortcutMatches, shortcutSettings, validateShortcuts, writeShortcuts } from "./shortcuts.mjs";
+
+const terminationSignals = ["SIGHUP", "SIGINT", "SIGTERM"];
 
 export async function interactivePick(catalog, options, shortcuts) {
   if (!process.stdin.isTTY || !process.stderr.isTTY) {
@@ -31,9 +34,14 @@ export async function interactivePick(catalog, options, shortcuts) {
   renderPicker(state);
 
   return await new Promise((resolveSelection, reject) => {
+    let restored = false;
     const cleanup = () => {
+      if (restored) return;
+      restored = true;
       process.stdin.off("keypress", onKeypress);
       process.stderr.off("resize", onResize);
+      process.off("exit", onExit);
+      for (const signal of terminationSignals) process.off(signal, onSignal);
       process.stdin.setRawMode(Boolean(wasRaw));
       process.stdin.pause();
       process.stderr.write(`${ESC}?25h${ESC}?1049l`);
@@ -45,6 +53,13 @@ export async function interactivePick(catalog, options, shortcuts) {
     const fail = error => {
       cleanup();
       reject(error);
+    };
+    // A signal or a crash never reaches finish or fail, and would otherwise leave the terminal
+    // in raw mode on the alternate screen with the cursor still hidden.
+    const onExit = () => cleanup();
+    const onSignal = signal => {
+      cleanup();
+      process.exit(128 + (constants.signals[signal] || 0));
     };
     const onResize = () => {
       try {
@@ -80,11 +95,14 @@ export async function interactivePick(catalog, options, shortcuts) {
           const changedSetting = shortcutSettings.find(setting => setting.id === state.captureShortcut);
           state.savingShortcut = true;
           await writeShortcuts(shortcutConfigPath(), nextShortcuts);
+          state.savingShortcut = false;
+          // Ctrl+C is answered while the write is still in flight, so repainting here would
+          // draw a full frame over the terminal cleanup already restored.
+          if (restored) return;
           state.shortcuts = nextShortcuts;
           state.captureShortcut = "";
           state.settingsMessage = `Saved ${changedSetting.label} as ${shortcutLabel(nextShortcuts[changedSetting.id])}`;
           state.settingsError = false;
-          state.savingShortcut = false;
           renderPicker(state);
           return;
         }
@@ -148,5 +166,7 @@ export async function interactivePick(catalog, options, shortcuts) {
 
     process.stdin.on("keypress", onKeypress);
     process.stderr.on("resize", onResize);
+    process.on("exit", onExit);
+    for (const signal of terminationSignals) process.on(signal, onSignal);
   });
 }

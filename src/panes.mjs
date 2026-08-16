@@ -1,5 +1,6 @@
 import { referenceFor } from "../catalog.mjs";
 import { bold, cyan, dim, green, yellow } from "./ansi.mjs";
+import { singleLine } from "./parse.mjs";
 import { matchingCapabilities } from "./search.mjs";
 import { shortcutConfigPath, shortcutLabel, shortcutSettings } from "./shortcuts.mjs";
 import { badge, clippedWrap, fitPane, labeledPathLines, pad, truncate, truncateFromStart, visibleLength, wrapPath } from "./text.mjs";
@@ -48,7 +49,7 @@ function capabilityRow(item, selected, width, showScope = true) {
   const fixedWidth = 2 + scopeWidth + kind.length + override.length + 1;
   const nameWidth = Math.max(4, width - fixedWidth);
   const name = truncate(item.name, nameWidth);
-  const gap = " ".repeat(Math.max(1, width - 2 - scopeWidth - name.length - kind.length - override.length));
+  const gap = " ".repeat(Math.max(1, width - 2 - scopeWidth - visibleLength(name) - kind.length - override.length));
   const styledScope = scope ? `${item.scope === "project" ? green(scope) : dim(scope)} ` : "";
   const styledName = selected ? cyan(bold(name)) : name;
   const styledKind = selected ? bold(kind) : dim(kind);
@@ -92,7 +93,7 @@ function sidebarOption(label, count, active, width) {
   const countText = String(count);
   const labelWidth = Math.max(1, width - countText.length - 3);
   const name = truncate(label, labelWidth);
-  const gap = " ".repeat(Math.max(1, width - name.length - countText.length - 2));
+  const gap = " ".repeat(Math.max(1, width - visibleLength(name) - countText.length - 2));
   const marker = active ? cyan("┃") : " ";
   return `${marker} ${active ? bold(name) : dim(name)}${gap}${active ? cyan(countText) : dim(countText)}`;
 }
@@ -174,7 +175,7 @@ export function settingsPane(state, width, height) {
   const message = state.settingsMessage
     ? clippedWrap(state.settingsMessage, width, 2).map(line => state.settingsError ? yellow(line) : green(line))
     : [];
-  const configPathLines = wrapPath(shortcutConfigPath(), width);
+  const configPathLines = wrapPath(singleLine(shortcutConfigPath()), width);
   const lines = [
     dim("SETTINGS"),
     bold("Hangar shortcuts"),

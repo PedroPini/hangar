@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { bold } from "./ansi.mjs";
+import { singleLine } from "./parse.mjs";
 
 export function parseArguments(argv) {
   const commands = new Set(["pick", "list", "doctor", "check", "config", "help"]);
@@ -37,7 +38,9 @@ export function parseArguments(argv) {
 
     if (argument === "--") continue;
     if (argument === "--project" || argument === "-C") options.project = valueAfter(argument);
-    else if (argument === "--query" || argument === "-q") options.query = valueAfter(argument);
+    // Keystrokes are filtered as they are typed; a query seeded from the CLI or the environment
+    // reaches the same frame and has to be held to the same rule.
+    else if (argument === "--query" || argument === "-q") options.query = singleLine(valueAfter(argument));
     else if (argument === "--kind" || argument === "-k") options.kind = valueAfter(argument);
     else if (argument === "--scope" || argument === "-s") options.scope = valueAfter(argument);
     else if (argument === "--tool" || argument === "-t") options.tool = valueAfter(argument);

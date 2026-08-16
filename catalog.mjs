@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { open, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { displayPath, firstParagraph, frontmatterField, humanize, plainText, shorten, slugify, tomlField, withoutTerminalControls, yamlScalarField } from "./src/parse.mjs";
+import { displayPath, firstParagraph, frontmatterField, humanize, plainText, shorten, singleLine, slugify, tomlField, yamlScalarField } from "./src/parse.mjs";
 
 export { frontmatterField, shorten, tomlField } from "./src/parse.mjs";
 
@@ -59,17 +59,20 @@ async function projectAncestors(project) {
   const ancestors = [];
   let directory = project;
 
-  while (directory !== homeDirectory && dirname(directory) !== directory) {
+  while (dirname(directory) !== directory) {
+    if (directory === homeDirectory) return ancestors;
     if (directory !== project) ancestors.push(directory);
     try {
       await stat(join(directory, ".git"));
-      break;
+      return ancestors;
     } catch (error) {
       if (!isUnreadablePath(error)) throw error;
     }
     directory = dirname(directory);
   }
-  return ancestors;
+  // Neither a repository boundary nor the home directory was found above the project, so the
+  // remaining ancestors are shared system directories such as /tmp that anyone can write to.
+  return [];
 }
 
 function isUnreadablePath(error) {
@@ -80,13 +83,18 @@ function containsPath(parent, child) {
   return parent === child || child.startsWith(`${parent}${sep}`);
 }
 
-async function canonicalDiscoveryRoots(locations, project) {
-  let projectCanonical = project;
+async function canonicalDirectory(directory) {
   try {
-    projectCanonical = await realpath(project);
+    return await realpath(directory);
   } catch (error) {
     if (!isUnreadablePath(error)) throw error;
+    return directory;
   }
+}
+
+async function canonicalDiscoveryRoots(locations, project) {
+  const anchorPaths = [...new Set(locations.map(location => location.anchor || project))];
+  const anchors = new Map(await Promise.all(anchorPaths.map(async path => [path, await canonicalDirectory(path)])));
 
   const candidates = (await Promise.all(locations.map(async location => {
     try {
@@ -104,9 +112,14 @@ async function canonicalDiscoveryRoots(locations, project) {
     add(globalRoots, candidate.location.kind, candidate.canonical);
     add(allowedRoots, candidate.location.kind, candidate.canonical);
   }
+  // A project location is trusted when it resolves to where its anchor — the project itself, or
+  // the ancestor or plugin root that contributed it — says it should be. Anchoring per location
+  // keeps a symlinked parent directory working while still refusing a link that points out of
+  // the tree the location was found in.
   for (const candidate of candidates.filter(item => item.location.scope === "project")) {
-    const expected = containsPath(project, candidate.logical)
-      ? join(projectCanonical, relative(project, candidate.logical))
+    const anchor = candidate.location.anchor || project;
+    const expected = containsPath(anchor, candidate.logical)
+      ? join(anchors.get(anchor), relative(anchor, candidate.logical))
       : candidate.logical;
     const trusted = candidate.canonical === candidate.logical
       || candidate.canonical === expected
@@ -168,11 +181,12 @@ async function claudePluginLocations(project) {
           directory: root,
           maxDepth: 2,
           mustInclude: "",
+          anchor: root,
           pluginId: pluginKey.split("@")[0],
           pluginVersion: installation.version || ""
         },
-        { scope, tool: "Claude Code", kind: "skill", directory: join(root, "skills"), maxDepth: 4, mustInclude: "" },
-        { scope, tool: "Claude Code", kind: "agent", directory: join(root, "agents"), maxDepth: 3, mustInclude: "" }
+        { scope, tool: "Claude Code", kind: "skill", directory: join(root, "skills"), maxDepth: 4, mustInclude: "", anchor: root },
+        { scope, tool: "Claude Code", kind: "agent", directory: join(root, "agents"), maxDepth: 3, mustInclude: "", anchor: root }
       );
     }
   }
@@ -192,7 +206,8 @@ export async function resolvedCapabilityLocations(projectDirectory = process.cwd
           kind,
           directory: join(ancestor, adapter.folder, `${kind}s`),
           maxDepth: kind === "skill" ? 2 : 1,
-          mustInclude: ""
+          mustInclude: "",
+          anchor: ancestor
         });
       }
     }
@@ -203,7 +218,8 @@ export async function resolvedCapabilityLocations(projectDirectory = process.cwd
         kind: "plugin",
         directory: join(ancestor, adapter.folder),
         maxDepth: 0,
-        mustInclude: ""
+        mustInclude: "",
+        anchor: ancestor
       });
     }
   }
@@ -273,9 +289,26 @@ async function discoverFiles(location, allowedRoots) {
   return found;
 }
 
-async function skillPresentation(path) {
+// Presentation and manifest files sit beside or above a discovered capability, so they never
+// passed through discoverFiles. Resolve them the same way it does and refuse anything whose
+// target lands outside every root the scan already trusts. Returns null when there is nothing
+// readable to use, so callers can tell an absent file from an empty one.
+async function readContainedFile(path, trustedRoots) {
+  let canonical;
   try {
-    const yaml = await readCapabilityFile(join(dirname(path), "agents", "openai.yaml"));
+    canonical = await realpath(path);
+  } catch (error) {
+    if (isUnreadablePath(error)) return null;
+    throw error;
+  }
+  if (!trustedRoots.some(root => containsPath(root, canonical))) return null;
+  return readCapabilityFile(path);
+}
+
+async function skillPresentation(path, trustedRoots) {
+  try {
+    const yaml = await readContainedFile(join(dirname(path), "agents", "openai.yaml"), trustedRoots);
+    if (yaml === null) return { name: "", description: "" };
     return {
       name: yamlScalarField(yaml, "display_name"),
       description: yamlScalarField(yaml, "short_description")
@@ -288,16 +321,21 @@ async function skillPresentation(path) {
 
 const collectionManifestCache = new Map();
 
-async function readCollectionManifest(path) {
+async function readCollectionManifest(path, trustedRoots) {
   if (!collectionManifestCache.has(path)) {
     collectionManifestCache.set(path, (async () => {
       try {
-        const manifest = JSON.parse(await readCapabilityFile(path));
+        const content = await readContainedFile(path, trustedRoots);
+        if (content === null) return null;
+        const manifest = JSON.parse(content);
+        if (!manifest || typeof manifest !== "object") return null;
         const interfaceMetadata = manifest.interface || {};
-        const rawId = manifest.name || basename(dirname(dirname(path)));
-        const rawName = interfaceMetadata.displayName || interfaceMetadata.display_name || rawId;
+        // Manifest fields are whatever JSON happened to hold, so normalise them to strings
+        // before anything downstream calls a string method on them.
+        const rawId = plainText(manifest.name || basename(dirname(dirname(path))));
+        const rawName = plainText(interfaceMetadata.displayName || interfaceMetadata.display_name || rawId);
         const rawDescription = interfaceMetadata.shortDescription || interfaceMetadata.short_description || manifest.description || "";
-        const name = /^[a-z0-9_-]+$/.test(rawName) ? humanize(rawName) : plainText(rawName);
+        const name = /^[a-z0-9_-]+$/.test(rawName) ? humanize(rawName) : rawName;
         return { id: slugify(rawId), name, description: shorten(rawDescription || `${name} capability collection.`), sourcePath: path };
       } catch (error) {
         if (isUnreadablePath(error) || error instanceof SyntaxError) return null;
@@ -308,11 +346,11 @@ async function readCollectionManifest(path) {
   return collectionManifestCache.get(path);
 }
 
-async function collectionFor(path, project) {
+async function collectionFor(path, project, trustedRoots) {
   let directory = dirname(path);
   for (let depth = 0; depth < 9; depth += 1) {
     for (const folder of [".codex-plugin", ".claude-plugin", ".cursor-plugin"]) {
-      const collection = await readCollectionManifest(join(directory, folder, "plugin.json"));
+      const collection = await readCollectionManifest(join(directory, folder, "plugin.json"), trustedRoots);
       if (collection) {
         const { sourcePath, ...metadata } = collection;
         return { ...metadata, path: displayPath(sourcePath, project) };
@@ -324,33 +362,29 @@ async function collectionFor(path, project) {
   return null;
 }
 
-async function readPluginCapability(discovery, project) {
+async function readPluginCapability(discovery, project, trustedRoots) {
   let content;
   let manifest = {};
   if (discovery.synthetic) {
-    try {
-      content = await readCapabilityFile(join(discovery.path, "README.md"));
-    } catch (error) {
-      if (!isUnreadablePath(error)) throw error;
-      content = discovery.location.pluginId;
-    }
+    const readme = await readContainedFile(join(discovery.path, "README.md"), trustedRoots);
+    content = readme === null ? discovery.location.pluginId : readme;
   } else {
     content = await readCapabilityFile(discovery.path);
-    manifest = JSON.parse(content);
+    manifest = JSON.parse(content) || {};
   }
 
   const { scope, tool } = discovery.location;
   const pluginRoot = discovery.synthetic ? discovery.path : dirname(dirname(discovery.path));
   const interfaceMetadata = manifest.interface || {};
   const rawId = plainText(manifest.name || discovery.location.pluginId || basename(pluginRoot));
-  const rawName = interfaceMetadata.displayName || interfaceMetadata.display_name || rawId;
-  const name = /^[a-z0-9_-]+$/.test(rawName) ? humanize(rawName) : plainText(rawName);
+  const rawName = plainText(interfaceMetadata.displayName || interfaceMetadata.display_name || rawId);
+  const name = /^[a-z0-9_-]+$/.test(rawName) ? humanize(rawName) : rawName;
   const readmeDescription = discovery.synthetic ? firstParagraph(content) : "";
   const rawDescription = interfaceMetadata.shortDescription || interfaceMetadata.short_description || manifest.description || readmeDescription;
   const rawDetail = interfaceMetadata.longDescription || interfaceMetadata.long_description || rawDescription;
   const description = shorten(rawDescription || `${name} plugin available through ${tool}.`);
   const detail = shorten(rawDetail || description, 360);
-  const version = manifest.version || discovery.location.pluginVersion || "";
+  const version = plainText(manifest.version || discovery.location.pluginVersion || "");
   const author = plainText(typeof manifest.author === "string" ? manifest.author : manifest.author?.name || "");
   const sourcePath = discovery.synthetic ? pluginRoot : discovery.path;
   const hash = createHash("sha256").update(content).digest("hex").slice(0, 16);
@@ -376,8 +410,8 @@ async function readPluginCapability(discovery, project) {
   };
 }
 
-async function readCapability(discovery, project) {
-  if (discovery.location.kind === "plugin") return readPluginCapability(discovery, project);
+async function readCapability(discovery, project, trustedRoots) {
+  if (discovery.location.kind === "plugin") return readPluginCapability(discovery, project, trustedRoots);
   const content = await readCapabilityFile(discovery.path);
   const { kind, scope, tool } = discovery.location;
   const fallbackName = kind === "skill" ? basename(dirname(discovery.path)) : basename(discovery.path, ".md");
@@ -385,12 +419,12 @@ async function readCapability(discovery, project) {
   const heading = isToml ? "" : content.match(/^#\s+(.+)$/m)?.[1] || "";
   const metadataName = isToml ? tomlField(content, "name") : frontmatterField(content, "name");
   const rawName = plainText(metadataName || heading || fallbackName);
-  const presentation = kind === "skill" ? await skillPresentation(discovery.path) : { name: "", description: "" };
+  const presentation = kind === "skill" ? await skillPresentation(discovery.path, trustedRoots) : { name: "", description: "" };
   const name = plainText(presentation.name) || (/^[a-z0-9_-]+$/.test(rawName) ? humanize(rawName) : rawName);
   const rawDescription = (isToml ? tomlField(content, "description") : frontmatterField(content, "description")) || (isToml ? "" : firstParagraph(content));
   const description = shorten(presentation.description || rawDescription || `${humanize(kind)} available through ${tool}.`);
   const hash = createHash("sha256").update(content).digest("hex").slice(0, 16);
-  const collection = await collectionFor(discovery.path, project);
+  const collection = await collectionFor(discovery.path, project, trustedRoots);
   const collections = collection ? [collection] : [];
   const collectionText = collections.flatMap(item => [item.name, item.description]).join(" ");
 
@@ -461,10 +495,13 @@ async function settledWithLimit(items, limit, worker) {
 export async function scanCapabilities(projectDirectory = process.cwd()) {
   const project = resolve(projectDirectory);
   remainingCapabilityBytes = maximumCapabilityBytes;
+  // Manifests are cached by path, and the roots that vet them belong to this scan alone.
+  collectionManifestCache.clear();
   const locations = await resolvedCapabilityLocations(project);
   const allowedRoots = await canonicalDiscoveryRoots(locations, project);
+  const trustedRoots = [...new Set([...allowedRoots.values()].flat())];
   const discoveries = (await Promise.all(locations.map(location => discoverFiles(location, allowedRoots.get(location.kind) || [])))).flat();
-  const settled = await settledWithLimit(discoveries, maximumConcurrentReads, item => readCapability(item, project));
+  const settled = await settledWithLimit(discoveries, maximumConcurrentReads, item => readCapability(item, project, trustedRoots));
   const parsed = [
     ...settled.filter(result => result.status === "fulfilled").map(result => result.value),
     ...codexBuiltInAgents()
@@ -513,7 +550,7 @@ export async function scanCapabilities(projectDirectory = process.cwd()) {
     .sort((left, right) => (left.scope === right.scope ? left.name.localeCompare(right.name) : left.scope === "project" ? -1 : 1));
 
   return {
-    project: withoutTerminalControls(project).replace(/[\t\r\n]/g, ""),
+    project: singleLine(project),
     projectName: plainText(basename(project)),
     scannedAt: new Date().toISOString(),
     unreadableCount: settled.filter(result => result.status === "rejected").length,

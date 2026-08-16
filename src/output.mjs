@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { referenceFor } from "../catalog.mjs";
 import { bold, cyan, dim, green } from "./ansi.mjs";
+import { singleLine } from "./parse.mjs";
 import { readShortcuts, shortcutConfigPath, shortcutLabel, validateShortcuts, writeShortcuts } from "./shortcuts.mjs";
 import { truncate } from "./text.mjs";
 
@@ -17,7 +18,7 @@ export async function configureShortcuts(options) {
   if (changed) await writeShortcuts(path, shortcuts);
 
   process.stdout.write(`${changed ? `${green("Saved")} ` : ""}${bold("Hangar shortcuts")}\n`);
-  process.stdout.write(`${dim("File")}      ${path}\n`);
+  process.stdout.write(`${dim("File")}      ${singleLine(path)}\n`);
   process.stdout.write(`${dim("Type")}      ${shortcutLabel(shortcuts.type)}\n`);
   process.stdout.write(`${dim("Scope")}     ${shortcutLabel(shortcuts.scope)}\n`);
   process.stdout.write(`${dim("Settings")}  ${shortcutLabel(shortcuts.config)}\n`);

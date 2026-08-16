@@ -52,6 +52,12 @@ export function withoutTerminalControls(value) {
     .replace(/[\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g, "");
 }
 
+// Anything rendered into a picker frame has to be one printable line: control sequences can
+// retitle or clear the user's terminal, and a stray newline shifts every pane below it.
+export function singleLine(value) {
+  return withoutTerminalControls(value).replace(/[\t\r\n]/g, "");
+}
+
 export function plainText(value) {
   return withoutTerminalControls(value)
     .replace(/\[([^\]]+)]\([^)]+\)/g, "$1")
@@ -89,7 +95,7 @@ export function displayPath(path, project) {
   let displayed = path;
   if (path === project || path.startsWith(`${project}${sep}`)) displayed = relative(project, path) || ".";
   else if (path === homeDirectory || path.startsWith(`${homeDirectory}${sep}`)) displayed = `~/${relative(homeDirectory, path)}`;
-  return withoutTerminalControls(displayed).replace(/[\t\r\n]/g, "");
+  return singleLine(displayed);
 }
 
 export function yamlScalarField(yaml, field) {
