@@ -65,28 +65,43 @@ export function validateShortcuts(shortcuts) {
   return normalized;
 }
 
-export async function readShortcuts(path = shortcutConfigPath()) {
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// The only place a config file is turned into an object. Anything that would not survive
+// a round trip through JSON.stringify is rejected here rather than silently discarded.
+function parseConfig(text, path) {
   let config;
   try {
-    config = JSON.parse(await readFile(path, "utf8"));
+    config = JSON.parse(text);
+  } catch {
+    throw new Error(`Invalid JSON in ${path}`);
+  }
+  if (!isPlainObject(config)) throw new Error(`${path} must contain a JSON object`);
+  if (config.shortcuts !== undefined && !isPlainObject(config.shortcuts)) {
+    throw new Error(`"shortcuts" in ${path} must be a JSON object`);
+  }
+  return config;
+}
+
+async function readConfig(path) {
+  try {
+    return parseConfig(await readFile(path, "utf8"), path);
   } catch (error) {
-    if (error.code === "ENOENT") return { ...defaultShortcuts };
-    if (error instanceof SyntaxError) throw new Error(`Invalid JSON in ${path}`);
+    if (error.code === "ENOENT") return null;
     throw error;
   }
+}
+
+export async function readShortcuts(path = shortcutConfigPath()) {
+  const config = await readConfig(path);
+  if (!config) return { ...defaultShortcuts };
   return validateShortcuts({ ...defaultShortcuts, ...config.shortcuts });
 }
 
 export async function writeShortcuts(path, shortcuts) {
-  let config = {};
-  try {
-    config = JSON.parse(await readFile(path, "utf8"));
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      if (error instanceof SyntaxError) throw new Error(`Invalid JSON in ${path}`);
-      throw error;
-    }
-  }
+  const config = await readConfig(path) || {};
   config.shortcuts = shortcuts;
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, "utf8");

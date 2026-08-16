@@ -2,7 +2,7 @@ import { referenceFor } from "../catalog.mjs";
 import { bold, cyan, dim, green, yellow } from "./ansi.mjs";
 import { matchingCapabilities } from "./search.mjs";
 import { shortcutConfigPath, shortcutLabel, shortcutSettings } from "./shortcuts.mjs";
-import { badge, clippedWrap, labeledPathLines, pad, truncate, truncateFromStart, visibleLength, wrapPath } from "./text.mjs";
+import { badge, clippedWrap, fitPane, labeledPathLines, pad, truncate, truncateFromStart, visibleLength, wrapPath } from "./text.mjs";
 
 function isProjectOverride(item) {
   return item.scope === "project" && item.sources.some(source => source.scope === "global");
@@ -62,7 +62,7 @@ export function listPane(state, matches, width, height, showScope = true) {
     lines.push("");
     lines.push(yellow("  No matching capabilities"));
     lines.push(dim(`  ${state.options.query ? "Backspace to broaden the search." : "Change Type or Scope to see more."}`));
-    return [...lines, ...Array(Math.max(0, height - lines.length)).fill("")].slice(0, height);
+    return fitPane(lines, width, height);
   }
 
   const visibleItems = Math.max(1, Math.min(state.options.limit, height - 2));
@@ -85,7 +85,7 @@ export function listPane(state, matches, width, height, showScope = true) {
     lines.push(capabilityRow(item, state.offset + index === state.selected, width, showScope));
   }
 
-  return [...lines, ...Array(Math.max(0, height - lines.length)).fill("")].slice(0, height);
+  return fitPane(lines, width, height);
 }
 
 function sidebarOption(label, count, active, width) {
@@ -143,7 +143,7 @@ export function sidebarPane(state, counts, width, height) {
     sidebarHeading("Settings", shortcutLabel(state.shortcuts.config), width),
     state.showConfig ? `${cyan("┃")} ${bold(truncate("hangar config", Math.max(1, width - 2)))}` : dim(truncate("  hangar config", width))
   ];
-  return [...lines, ...Array(Math.max(0, height - lines.length)).fill("")].slice(0, height);
+  return fitPane(lines, width, height);
 }
 
 export function settingsPane(state, width, height) {
@@ -160,7 +160,7 @@ export function settingsPane(state, width, height) {
       dim("Esc cancels"),
       ...(message.length ? ["", ...message] : [])
     ];
-    return [...lines, ...Array(Math.max(0, height - lines.length)).fill("")].slice(0, height);
+    return fitPane(lines, width, height);
   }
 
   const settingRows = shortcutSettings.map((setting, index) => {
@@ -190,7 +190,7 @@ export function settingsPane(state, width, height) {
     dim("CONFIG FILE"),
     ...configPathLines
   ];
-  return [...lines, ...Array(Math.max(0, height - lines.length)).fill("")].slice(0, height);
+  return fitPane(lines, width, height);
 }
 
 export function libraryPane(state, matches, width, height) {
@@ -205,13 +205,13 @@ export function libraryPane(state, matches, width, height) {
     dim("─".repeat(width)),
     ...listPane(state, matches, width, Math.max(1, height - 2), false)
   ];
-  return [...lines, ...Array(Math.max(0, height - lines.length)).fill("")].slice(0, height);
+  return fitPane(lines, width, height);
 }
 
 export function detailPane(item, options, width, height) {
   if (!item) {
     const lines = [dim("SELECTED"), "", dim("Choose a capability to inspect it.")];
-    return [...lines, ...Array(Math.max(0, height - lines.length)).fill("")].slice(0, height);
+    return fitPane(lines, width, height);
   }
 
   const override = isProjectOverride(item);
@@ -251,13 +251,13 @@ export function detailPane(item, options, width, height) {
     dim("SOURCE COPIES"),
     `${item.sourceCount} ${item.sourceCount === 1 ? "location" : "locations"} · ${item.variantCount} ${item.variantCount === 1 ? "variant" : "variants"}`
   ];
-  return [...lines, ...Array(Math.max(0, height - lines.length)).fill("")].slice(0, height);
+  return fitPane(lines, width, height);
 }
 
 export function previewPane(item, options, width, height) {
   if (!item) {
     const lines = [dim("SELECTED"), "", dim("Choose a result to see how to use it.")];
-    return [...lines, ...Array(Math.max(0, height - lines.length)).fill("")].slice(0, height);
+    return fitPane(lines, width, height);
   }
 
   const reference = referenceFor(item, options.host);
@@ -285,7 +285,7 @@ export function previewPane(item, options, width, height) {
       ...(relationshipLine ? [relationshipLine] : []),
       ...sourceLines
     ];
-    return [...lines, ...Array(Math.max(0, height - lines.length)).fill("")].slice(0, height);
+    return fitPane(lines, width, height);
   }
 
   const statusParts = [scopeBadge(item), badge(item.kind, "cyan")];
@@ -307,5 +307,5 @@ export function previewPane(item, options, width, height) {
     ...(relationshipLine ? [relationshipLine] : []),
     ...(!isPlugin ? [dim("SOURCE"), ...pathLines] : [])
   ];
-  return [...lines, ...Array(Math.max(0, height - lines.length)).fill("")].slice(0, height);
+  return fitPane(lines, width, height);
 }

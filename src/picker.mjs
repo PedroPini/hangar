@@ -7,10 +7,7 @@ import { labeledPathLines, pad, truncate, truncateFromStart } from "./text.mjs";
 export function renderPicker(state) {
   const width = Math.max(42, Math.min(process.stderr.columns || 100, 140));
   const height = Math.max(18, process.stderr.rows || 30);
-  const rankedMatches = matchingCapabilities(state.catalog.capabilities, state.options);
-  const matches = state.options.scope === "all"
-    ? [...rankedMatches.filter(item => item.scope === "project"), ...rankedMatches.filter(item => item.scope === "global")]
-    : rankedMatches;
+  const matches = matchingCapabilities(state.catalog.capabilities, state.options);
   state.matches = matches;
   state.selected = Math.max(0, Math.min(state.selected, matches.length - 1));
   const counts = filterCounts(state.catalog.capabilities, state.options);

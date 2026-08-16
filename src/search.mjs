@@ -58,9 +58,15 @@ export function matchingCapabilities(capabilities, options) {
     if (value >= 0) results.push({ item, score: value });
   }
 
-  return results
+  const ranked = results
     .sort((left, right) => right.score - left.score || left.item.name.localeCompare(right.item.name))
     .map(result => result.item);
+
+  // Project capabilities group ahead of global ones. This is the only definition of match
+  // order, so the picker, --first, and list can never disagree about the best match.
+  return options.scope === "all"
+    ? [...ranked.filter(item => item.scope === "project"), ...ranked.filter(item => item.scope === "global")]
+    : ranked;
 }
 
 export function filterCounts(capabilities, options) {
