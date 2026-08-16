@@ -19,7 +19,8 @@
   "files": [
     "catalog.mjs",
     "cli.mjs",
-    "editor.mjs"
+    "editor.mjs",
+    "src"
   ],
   "publishConfig": {
     "access": "public"
@@ -30,7 +31,7 @@
     "list": "node cli.mjs list",
     "scan": "node cli.mjs list --json",
     "test": "node --test",
-    "check": "node --check cli.mjs && node --check catalog.mjs && node --check editor.mjs && node --test"
+    "check": "node scripts/check-syntax.mjs && node --test"
   },
   "engines": {
     "node": ">=22"
