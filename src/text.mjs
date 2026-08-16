@@ -48,7 +48,7 @@ export function wrapPath(value, width) {
   let remaining = value;
   while (remaining.length > width) {
     let split = remaining.slice(0, width + 1).lastIndexOf("/");
-    if (split < Math.floor(width * 0.4)) split = width;
+    if (split < Math.max(1, Math.floor(width * 0.4))) split = width;
     lines.push(remaining.slice(0, split));
     remaining = remaining.slice(split);
   }
